@@ -4,13 +4,7 @@ use std::{fs, io::Write, process, thread::sleep, time::Duration};
 const POOL_SIZE: usize = 4;
 
 fn main() {
-    let mut server = match Server::new("127.0.0.1:3000") {
-        Ok(server) => server,
-        Err(e) => {
-            eprintln!("Application error: {:?}", e);
-            process::exit(1);
-        }
-    };
+    let mut server = Server::new("127.0.0.1:3000", POOL_SIZE);
 
     server.get("/", |mut stream| {
         let content = fs::read_to_string("static/index.html").unwrap();
@@ -40,7 +34,7 @@ fn main() {
         stream.flush().unwrap();
     });
 
-    if let Err(e) = server.run(Some(POOL_SIZE)) {
+    if let Err(e) = server.run() {
         eprintln!("Application error: {:?}", e);
         process::exit(1);
     }

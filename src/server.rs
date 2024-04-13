@@ -1,10 +1,13 @@
 use crate::ThreadPool;
 use std::{
     error::Error,
-    io::Read,
+    fmt::Display,
+    fs,
+    io::{Read, Write},
     net::{TcpListener, TcpStream},
     sync::Arc,
 };
+use termion::color;
 
 pub const STATUS_OK: &str = "HTTP/1.1 200 OK";
 pub const STATUS_NOT_FOUND: &str = "HTTP/1.1 404 NOT_FOUND";
@@ -17,29 +20,37 @@ enum Method {
     Put,
 }
 
-impl Method {
-    fn to_str(&self) -> String {
+impl Display for Method {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Method::Put => "PUT",
             Method::Get => "GET",
             Method::Delete => "DELETE",
             Method::Post => "POST",
         };
-        String::from(s)
+        write!(f, "{}", s)
     }
 }
 
-type Handler = fn(TcpStream);
+type HandlerFn = fn(TcpStream);
 
-struct Request {
+struct Handler {
     method: Method,
     path: String,
-    handler: Arc<fn(TcpStream)>,
+    handler: Arc<HandlerFn>,
 }
 
-impl Request {
-    fn new(path: &str, method: Method, handler: fn(TcpStream)) -> Request {
-        Request {
+impl Display for Handler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let c_method = format!("{}{}", color::Fg(color::Blue), self.method);
+        let c_path = format!("{}{}", color::Fg(color::Green), self.path);
+        write!(f, "{} {} {}", c_method, c_path, color::Fg(color::White))
+    }
+}
+
+impl Handler {
+    fn new(path: &str, method: Method, handler: fn(TcpStream)) -> Handler {
+        Handler {
             method,
             handler: Arc::new(handler),
             path: String::from(path),
@@ -47,60 +58,96 @@ impl Request {
     }
 
     fn http_str(&self) -> String {
-        format!("{} {} HTTP/1.1\r\n", self.method.to_str(), self.path)
+        format!("{} {} HTTP/1.1\r\n", self.method, self.path)
+    }
+
+    fn check(&self, buffer: &[u8; 1024]) -> bool {
+        buffer.starts_with(self.http_str().as_bytes())
     }
 }
 
 pub struct Server {
     addr: String,
-    end_point: Vec<Request>,
+    end_point: Vec<Handler>,
+    pool_size: usize,
 }
 
 impl Server {
-    pub fn new(addr: &str) -> Result<Server, Box<dyn Error>> {
-        Ok(Server {
+    pub fn new(addr: &str, pool_size: usize) -> Server {
+        Server {
             addr: String::from(addr),
-            end_point: vec![],
-        })
+            end_point: Vec::new(),
+            pool_size: pool_size.max(2),
+        }
     }
 
-    pub fn get(&mut self, path: &str, h: Handler) -> &mut Server {
-        self.end_point.push(Request::new(path, Method::Get, h));
+    pub fn get(&mut self, path: &str, h: HandlerFn) -> &mut Server {
+        self.end_point.push(Handler::new(path, Method::Get, h));
         self
     }
 
-    pub fn post(&mut self, path: &str, h: Handler) -> &mut Server {
-        self.end_point.push(Request::new(path, Method::Post, h));
+    pub fn post(&mut self, path: &str, h: HandlerFn) -> &mut Server {
+        self.end_point.push(Handler::new(path, Method::Post, h));
         self
     }
 
-    pub fn delete(&mut self, path: &str, h: Handler) -> &mut Server {
-        self.end_point.push(Request::new(path, Method::Delete, h));
+    pub fn delete(&mut self, path: &str, h: HandlerFn) -> &mut Server {
+        self.end_point.push(Handler::new(path, Method::Delete, h));
         self
     }
 
-    pub fn put(&mut self, path: &str, h: Handler) -> &mut Server {
-        self.end_point.push(Request::new(path, Method::Put, h));
+    pub fn put(&mut self, path: &str, h: HandlerFn) -> &mut Server {
+        self.end_point.push(Handler::new(path, Method::Put, h));
         self
     }
 
-    pub fn run(&self, pool_size: Option<usize>) -> Result<(), Box<dyn Error>> {
+    fn log(&self) -> Result<(), Box<dyn Error>> {
+        clearscreen::clear()?;
+        println!("Server running...\n");
+        for ep in self.end_point.iter() {
+            println!("{ep}");
+        }
+        println!("\nserving on - {}", self.addr);
+        Ok(())
+    }
+
+    pub fn run(&self) -> Result<(), Box<dyn Error>> {
         let listener = TcpListener::bind(&self.addr)?;
-        let pool = ThreadPool::new(pool_size.unwrap_or(4));
-        println!("Server running...");
-        println!("serving on - {}", self.addr);
-
+        let pool = ThreadPool::new(self.pool_size);
+        self.log()?;
         for stream in listener.incoming() {
             let mut stream = stream?;
             let mut buffer = [0; 1024];
             stream.read(&mut buffer)?;
 
-            for ep in self.end_point.iter() {
-                if buffer.starts_with(ep.http_str().as_bytes()) {
-                    let f = ep.handler.clone();
-                    pool.execute(move || f(stream));
-                    break;
-                }
+            // for ep in self.end_point.iter() {
+            //     let req_body = String::from_utf8_lossy(&buffer[..]);
+            //     println!(
+            //         "Incoming request {}",
+            //         req_body.lines().next().unwrap_or("No string data found!")
+            //     );
+            //     if ep.check(&buffer) {
+            //         let f = ep.handler.clone();
+            //         pool.execute(move || f(stream));
+            //         break;
+            //     }
+            // }
+
+            if let Some(ep) = self.end_point.iter().find(|&x| x.check(&buffer)) {
+                let f = ep.handler.clone();
+                pool.execute(move || f(stream));
+            } else {
+                let content = fs::read_to_string("static/404.html")?;
+
+                let res = format!(
+                    "{}\r\nContent=Length: {}\r\n\r\n{}",
+                    STATUS_NOT_FOUND,
+                    content.len(),
+                    content
+                );
+
+                stream.write(res.as_bytes())?;
+                stream.flush()?;
             }
         }
         Ok(())
