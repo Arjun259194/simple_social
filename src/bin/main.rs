@@ -34,6 +34,29 @@ fn main() {
         stream.flush().unwrap();
     });
 
+    server.get("/jsondata", |mut stream| {
+        let content = String::from(
+            r#"{
+            "name":"Arjun",
+            "age": 20,
+            "email":"arjun259194@gmail.com"
+        }"#,
+        );
+
+        //TODO not working
+        let response = format!(
+            "{}Content-Length: {}\r\n\r\nContent-Type: application/json\r\n\r\n{}",
+            STATUS_OK,
+            content.len(),
+            content
+        );
+
+        println!("{response}");
+
+        stream.write(response.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+
     if let Err(e) = server.run() {
         eprintln!("Application error: {:?}", e);
         process::exit(1);

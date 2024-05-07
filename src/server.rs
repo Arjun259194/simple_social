@@ -72,6 +72,26 @@ pub struct Server {
     pool_size: usize,
 }
 
+enum HttpStatus {
+    OK,
+    NotFound,
+    InternalServerError,
+}
+
+impl Display for HttpStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                HttpStatus::OK => 200,
+                HttpStatus::NotFound => 404,
+                HttpStatus::InternalServerError => 500,
+            }
+        )
+    }
+}
+
 impl Server {
     pub fn new(addr: &str, pool_size: usize) -> Server {
         Server {
@@ -119,19 +139,6 @@ impl Server {
             let mut stream = stream?;
             let mut buffer = [0; 1024];
             stream.read(&mut buffer)?;
-
-            // for ep in self.end_point.iter() {
-            //     let req_body = String::from_utf8_lossy(&buffer[..]);
-            //     println!(
-            //         "Incoming request {}",
-            //         req_body.lines().next().unwrap_or("No string data found!")
-            //     );
-            //     if ep.check(&buffer) {
-            //         let f = ep.handler.clone();
-            //         pool.execute(move || f(stream));
-            //         break;
-            //     }
-            // }
 
             if let Some(ep) = self.end_point.iter().find(|&x| x.check(&buffer)) {
                 let f = ep.handler.clone();
