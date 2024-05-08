@@ -13,6 +13,7 @@ pub const STATUS_OK: &str = "HTTP/1.1 200 OK";
 pub const STATUS_NOT_FOUND: &str = "HTTP/1.1 404 NOT_FOUND";
 pub const STATUS_INTERNAL_SERVER_ERROR: &str = "HTTP/1.1 500 INTERNAL_SERVER_ERROR";
 
+#[derive(Clone, Copy)]
 enum Method {
     Get,
     Post,
@@ -34,6 +35,7 @@ impl Display for Method {
 
 type HandlerFn = fn(TcpStream);
 
+#[derive(Clone)]
 struct Handler {
     method: Method,
     path: String,
@@ -66,29 +68,90 @@ impl Handler {
     }
 }
 
+pub trait RequestHandler {
+    fn get(&mut self, path: &str, h: HandlerFn) -> &mut Self;
+
+    fn post(&mut self, path: &str, h: HandlerFn) -> &mut Self;
+
+    fn put(&mut self, path: &str, h: HandlerFn) -> &mut Self;
+
+    fn delete(&mut self, path: &str, h: HandlerFn) -> &mut Self;
+}
+
+#[derive(Clone)]
+struct Route {
+    method: Method,
+    path: String,
+    handler: HandlerFn,
+}
+
+impl Route {
+    fn new(path: &str, method: Method, h: HandlerFn) -> Route {
+        Route {
+            method,
+            path: String::from(path),
+            handler: h,
+        }
+    }
+}
+
+pub struct Router {
+    end_points: Vec<Route>,
+}
+
+impl Router {
+    pub fn new() -> Router {
+        Router { end_points: vec![] }
+    }
+}
+
+impl RequestHandler for Router {
+    fn get(&mut self, path: &str, h: HandlerFn) -> &mut Self {
+        self.end_points.push(Route::new(path, Method::Get, h));
+        self
+    }
+
+    fn post(&mut self, path: &str, h: HandlerFn) -> &mut Self {
+        self.end_points.push(Route::new(path, Method::Post, h));
+        self
+    }
+
+    fn put(&mut self, path: &str, h: HandlerFn) -> &mut Self {
+        self.end_points.push(Route::new(path, Method::Put, h));
+        self
+    }
+
+    fn delete(&mut self, path: &str, h: HandlerFn) -> &mut Self {
+        self.end_points.push(Route::new(path, Method::Delete, h));
+        self
+    }
+}
+
 pub struct Server {
     addr: String,
-    end_point: Vec<Handler>,
+    end_points: Vec<Handler>,
     pool_size: usize,
 }
 
-enum HttpStatus {
-    OK,
-    NotFound,
-    InternalServerError,
-}
+impl RequestHandler for Server {
+    fn get(&mut self, path: &str, h: HandlerFn) -> &mut Self {
+        self.end_points.push(Handler::new(path, Method::Get, h));
+        self
+    }
 
-impl Display for HttpStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                HttpStatus::OK => 200,
-                HttpStatus::NotFound => 404,
-                HttpStatus::InternalServerError => 500,
-            }
-        )
+    fn post(&mut self, path: &str, h: HandlerFn) -> &mut Self {
+        self.end_points.push(Handler::new(path, Method::Post, h));
+        self
+    }
+
+    fn delete(&mut self, path: &str, h: HandlerFn) -> &mut Self {
+        self.end_points.push(Handler::new(path, Method::Delete, h));
+        self
+    }
+
+    fn put(&mut self, path: &str, h: HandlerFn) -> &mut Self {
+        self.end_points.push(Handler::new(path, Method::Put, h));
+        self
     }
 }
 
@@ -96,35 +159,30 @@ impl Server {
     pub fn new(addr: &str, pool_size: usize) -> Server {
         Server {
             addr: String::from(addr),
-            end_point: Vec::new(),
+            end_points: Vec::new(),
             pool_size: pool_size.max(2),
         }
     }
 
-    pub fn get(&mut self, path: &str, h: HandlerFn) -> &mut Server {
-        self.end_point.push(Handler::new(path, Method::Get, h));
-        self
-    }
+    pub fn mount(&mut self, path: &str, router: Router) -> &mut Self {
+        let super_paths: Vec<_> = path.split("/").collect();
+        for end_point in router.end_points.iter() {
+            let base_paths: Vec<_> = end_point.path.split("/").collect();
+            let paths = [&super_paths[..], &base_paths[..]].concat();
+            let paths: Vec<_> = paths.into_iter().filter(|s| !s.is_empty()).collect();
+            let path = "/".to_owned() + &paths.join("/");
+            let handler_fn = end_point.handler.clone();
 
-    pub fn post(&mut self, path: &str, h: HandlerFn) -> &mut Server {
-        self.end_point.push(Handler::new(path, Method::Post, h));
-        self
-    }
-
-    pub fn delete(&mut self, path: &str, h: HandlerFn) -> &mut Server {
-        self.end_point.push(Handler::new(path, Method::Delete, h));
-        self
-    }
-
-    pub fn put(&mut self, path: &str, h: HandlerFn) -> &mut Server {
-        self.end_point.push(Handler::new(path, Method::Put, h));
+            self.end_points
+                .push(Handler::new(&path, end_point.method, handler_fn));
+        }
         self
     }
 
     fn log(&self) -> Result<(), Box<dyn Error>> {
         clearscreen::clear()?;
         println!("Server running...\n");
-        for ep in self.end_point.iter() {
+        for ep in self.end_points.iter() {
             println!("{ep}");
         }
         println!("\nserving on - {}", self.addr);
@@ -140,7 +198,7 @@ impl Server {
             let mut buffer = [0; 1024];
             stream.read(&mut buffer)?;
 
-            if let Some(ep) = self.end_point.iter().find(|&x| x.check(&buffer)) {
+            if let Some(ep) = self.end_points.iter().find(|&x| x.check(&buffer)) {
                 let f = ep.handler.clone();
                 pool.execute(move || f(stream));
             } else {

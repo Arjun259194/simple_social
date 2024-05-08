@@ -6,6 +6,24 @@ const POOL_SIZE: usize = 4;
 fn main() {
     let mut server = Server::new("127.0.0.1:3000", POOL_SIZE);
 
+    let mut user_router = Router::new();
+
+    user_router.get("/profile", |mut stream| {
+        let content = fs::read_to_string("static/user/index.html").unwrap();
+
+        let res = format!(
+            "{}\r\nContent=Length: {}\r\n\r\n{}",
+            STATUS_OK,
+            content.len(),
+            content
+        );
+
+        stream.write(res.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+
+    server.mount("/user", user_router);
+
     server.get("/", |mut stream| {
         let content = fs::read_to_string("static/index.html").unwrap();
 
@@ -31,29 +49,6 @@ fn main() {
         );
 
         stream.write(res.as_bytes()).unwrap();
-        stream.flush().unwrap();
-    });
-
-    server.get("/jsondata", |mut stream| {
-        let content = String::from(
-            r#"{
-            "name":"Arjun",
-            "age": 20,
-            "email":"arjun259194@gmail.com"
-        }"#,
-        );
-
-        //TODO not working
-        let response = format!(
-            "{}Content-Length: {}\r\n\r\nContent-Type: application/json\r\n\r\n{}",
-            STATUS_OK,
-            content.len(),
-            content
-        );
-
-        println!("{response}");
-
-        stream.write(response.as_bytes()).unwrap();
         stream.flush().unwrap();
     });
 
