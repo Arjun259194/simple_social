@@ -33,7 +33,7 @@ impl Display for Method {
     }
 }
 
-type HandlerFn = fn(TcpStream);
+type HandlerFn = fn(TcpStream) -> Result<(), Box<dyn Error>>;
 
 #[derive(Clone)]
 struct Handler {
@@ -200,7 +200,11 @@ impl Server {
 
             if let Some(ep) = self.end_points.iter().find(|&x| x.check(&buffer)) {
                 let f = ep.handler.clone();
-                pool.execute(move || f(stream));
+                pool.execute(move || {
+                    if let Err(e) = f(stream) {
+                        eprintln!("Error executing: {:?}", e)
+                    }
+                });
             } else {
                 let content = fs::read_to_string("static/404.html")?;
 
